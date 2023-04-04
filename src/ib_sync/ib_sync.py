@@ -1,12 +1,14 @@
 import logging
 import random
 import time
+from dataclasses import dataclass
 from decimal import Decimal
+
+from timeout_decorator import timeout
 
 from ibapi.common import BarData, TickerId
 from ibapi.contract import Contract, ContractDetails
 from ibapi.execution import ExecutionFilter
-from timeout_decorator import timeout
 
 from .client import IBClient
 
@@ -20,6 +22,18 @@ logging.getLogger("ibapi.wrapper").setLevel(logging.WARNING)
 
 TIMEOUT = 5
 TIMEOUT_HISTORICAL = 150
+
+
+@dataclass
+class Position:
+    account: str
+    contract: Contract
+    amount: Decimal
+    av_cost: float
+    market_price: float = float("NaN")
+    market_value: float = float("NaN")
+    unrealized_pnl: float = float("NaN")
+    realized_pnl: float = float("NaN")
 
 
 class Results(list):
@@ -57,6 +71,9 @@ class IBSync(IBClient):
         self._contract_details = Results()
         self._historical_data = Results()
         self._head_timestamp = Results()
+
+        self._account_info = Results()
+        self._portfolio = Results()
 
         # TODO: приделать протухание
         self._orders_by_pid = {}
@@ -181,6 +198,92 @@ class IBSync(IBClient):
             if advancedOrderRejectJson:
                 txt += f", '{advancedOrderRejectJson}'"
             log.error(txt)
+
+    ##########################
+    ### Account
+
+    @timeout(TIMEOUT)
+    def get_account_info(self) -> tuple[dict, list[Position]]:
+        if not self.account_id:
+            return {}, []
+
+        self._account_info = Results()
+        self._portfolio = Results()
+
+        self.reqAccountUpdates(True, self.account_id)
+
+        while not (self._account_info.finished and self._portfolio.finished):
+            time.sleep(0.001)
+
+        # Представляете, так выглядит отписка!
+        self.reqAccountUpdates(False, self.account_id)
+
+        # Распарсить ответы
+        account_fields = {}
+        for rec in self._account_info:
+            if rec.get("accountName") != self.account_id:
+                continue
+            if rec.get("currency") not in ["", "USD"]:
+                continue
+            key = rec.get("key")
+            value = rec.get("value")
+            if key and value is not None:
+                account_fields[key] = value
+
+        return account_fields, list(self._portfolio)
+
+    def updateAccountValue(self, key: str, value: str, currency: str, accountName: str):
+        super().updateAccountValue(key, value, currency, accountName)
+        if not self._account_info.finished and accountName == self.account_id:
+            self._account_info.append(
+                {
+                    "key": key,
+                    "value": value,
+                    "currency": currency,
+                    "accountName": accountName,
+                }
+            )
+
+    def updatePortfolio(
+        self,
+        contract: Contract,
+        position: Decimal,
+        marketPrice: float,
+        marketValue: float,
+        averageCost: float,
+        unrealizedPNL: float,
+        realizedPNL: float,
+        accountName: str,
+    ):
+        super().updatePortfolio(
+            contract,
+            position,
+            marketPrice,
+            marketValue,
+            averageCost,
+            unrealizedPNL,
+            realizedPNL,
+            accountName,
+        )
+        if not self._portfolio.finished and accountName == self.account_id:
+            self._portfolio.append(
+                Position(
+                    contract=contract,
+                    amount=position,
+                    market_price=marketPrice,
+                    market_value=marketValue,
+                    av_cost=averageCost,
+                    unrealized_pnl=unrealizedPNL,
+                    realized_pnl=realizedPNL,
+                    account=accountName,
+                )
+            )
+
+    def accountDownloadEnd(self, accountName: str):
+        print("accountDownloadEnd")
+        super().accountDownloadEnd(accountName)
+        self._account_info.finish()
+        self._portfolio.finish()
 
     ##########################
     ### Positions

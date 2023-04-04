@@ -53,7 +53,8 @@ class IBClient(EWrapper, EClient):
         # cprint('Account value updated: key={}, value={}, currency={}, accountName={}'.format(key, value, currency, accountName), "blue")
 
     def updatePortfolio(self, contract, position, marketPrice, marketValue, averageCost, unrealizedPNL, realizedPNL, accountName):
-        cprint('Portfolio updated: contract={}, position={}, marketPrice={}, marketValue={}, averageCost={}, unrealizedPNL={}, realizedPNL={}, accountName={}'.format(contract.conId, position, marketPrice, marketValue, averageCost, unrealizedPNL, realizedPNL, accountName), "red")
+        pass
+        # cprint('Portfolio updated: contract={}, position={}, marketPrice={}, marketValue={}, averageCost={}, unrealizedPNL={}, realizedPNL={}, accountName={}'.format(contract.conId, position, marketPrice, marketValue, averageCost, unrealizedPNL, realizedPNL, accountName), "red")
 
     def updateAccountTime(self, timestamp: str):
         pass
