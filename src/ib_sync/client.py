@@ -42,21 +42,34 @@ class IBClient(EWrapper, EClient):
         """Receives a comma-separated string with the managed account ids."""
         super().managedAccounts(accountsList)
         self.account_id = accountsList.split(",")[0]
+        # Это событие приходит после соединения.
+        # Сбрасываю старые значения аккаунта.
         self.values[self.account_id] = {}
         log.info(f"Managed account: {self.account_id}")
 
-    def orderStatus(self, orderId, status, filled, remaining, avgFillPrice, permId, parentId, lastFillPrice, clientId, whyHeld, mktCapPrice):
-        print(f'Order status updated for order ID {orderId}: status={status}, filled={filled}, remaining={remaining}, permId={permId}')
+    def orderStatus(
+            self, orderId, status, filled, remaining, avgFillPrice,
+            permId, parentId, lastFillPrice, clientId, whyHeld, mktCapPrice
+        ):
+        print(
+            f"Order status updated for order ID {orderId}: "
+            f"clientId={clientId}, status={status}, filled={filled}, "
+            f"remaining={remaining}, permId={permId}"
+        )
 
     def updateAccountValue(self, key, value, currency, accountName):
         self.values[accountName][key] = value
-        # cprint('Account value updated: key={}, value={}, currency={}, accountName={}'.format(key, value, currency, accountName), "blue")
 
-    def updatePortfolio(self, contract, position, marketPrice, marketValue, averageCost, unrealizedPNL, realizedPNL, accountName):
+    def updatePortfolio(
+            self, contract, position, marketPrice, marketValue, averageCost,
+            unrealizedPNL, realizedPNL, accountName
+        ):
         pass
-        # cprint('Portfolio updated: contract={}, position={}, marketPrice={}, marketValue={}, averageCost={}, unrealizedPNL={}, realizedPNL={}, accountName={}'.format(contract.conId, position, marketPrice, marketValue, averageCost, unrealizedPNL, realizedPNL, accountName), "red")
 
     def updateAccountTime(self, timestamp: str):
+        """
+        NOTE: Это не время аккаунта, а время обновления аккаунта.
+        """
         pass
         # super().updateAccountTime(timestamp)
         # TODO: проверить, можно ли использовать для группировки приходящих updateAccountValue

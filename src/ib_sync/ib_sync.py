@@ -95,6 +95,10 @@ class IBSync(IBClient):
                 exchange = "CBOT"  # зерновые фьючерсы
             else:
                 exchange = "NYMEX"  # нефть, газ
+        # FIXME:
+        if exchange == "SMART":
+            if symbol in ["URA", "COPX", "REMX", "SPY"]:
+                exchange = "ARCA"
 
         sid = f"{exchange}_{symbol}"
 
@@ -180,7 +184,7 @@ class IBSync(IBClient):
         errorString: str,
         advancedOrderRejectJson="",
     ):
-        if errorCode in [2104, 2106, 2158]:
+        if errorCode in [2104, 2106, 2107, 2119, 2158]:
             # Это не ошибки, а сообщения connection is OK
             log.info(errorString)
         else:
@@ -280,7 +284,7 @@ class IBSync(IBClient):
             )
 
     def accountDownloadEnd(self, accountName: str):
-        print("accountDownloadEnd")
+        # print("accountDownloadEnd")
         super().accountDownloadEnd(accountName)
         self._account_info.finish()
         self._portfolio.finish()
@@ -303,7 +307,7 @@ class IBSync(IBClient):
         self, account: str, contract: Contract, position: Decimal, avgCost: float
     ):
         super().position(account, contract, position, avgCost)
-        log.warning(f"position: {contract.conId} {position} {avgCost}")
+        # log.warning(f"position: {contract.conId} {position} {avgCost}")
         if account == self.account_id:
             self._positions_by_conid[contract.conId] = (position, avgCost)
         if not self._positions.finished:
