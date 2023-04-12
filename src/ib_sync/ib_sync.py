@@ -194,6 +194,10 @@ class IBSync(IBClient):
                 self._historical_data.error = errorString
                 self._historical_data.finish()
 
+            if reqId > 0 and reqId == self._open_orders.r_id:
+                self._open_orders.error = errorString
+                self._open_orders.finish()
+
             # Стандартная ошибка слишком длинная
             if errorCode == 502:
                 errorString = "Couldn't connect to TWS"
@@ -321,6 +325,20 @@ class IBSync(IBClient):
     ### Orders
 
     @timeout(TIMEOUT)
+    def place_order(self, contract, order):
+        r_id = order.orderId
+        self._open_orders = Results(r_id)
+        self.placeOrder(r_id, contract, order)
+
+        while not (self._open_orders.finished or self._open_orders):
+            time.sleep(0.001)
+
+        if self._open_orders.error:
+            raise Exception(self._open_orders.error)
+        else:
+            return list(self._open_orders)[0]
+
+    @timeout(TIMEOUT)
     def get_orders(self):
         self._open_orders = Results()
         self._completed_orders = Results()
@@ -408,11 +426,36 @@ class IBSync(IBClient):
     ##########################
     ### History
 
-    # FIXME: для загрузки старой истории нужен большой timeout
-    # FIXME: для tradis нужен обычный timeout
-
     @timeout(TIMEOUT)
     def get_historical_data(
+        self,
+        contract: Contract,
+        end_dt: str,
+        duration: str = "300 S",
+        bar_size: str = "1 min",
+        data_type: str = "TRADES",
+        use_rth: int = 0,
+    ):
+        return self._get_historical_data(
+            contract, end_dt, duration, bar_size, data_type, use_rth
+        )
+
+    @timeout(TIMEOUT_HISTORICAL)
+    def get_old_historical_data(
+        self,
+        contract: Contract,
+        end_dt: str,
+        duration: str = "300 S",
+        bar_size: str = "1 min",
+        data_type: str = "TRADES",
+        use_rth: int = 0,
+    ):
+        # Тот же метод, но с большим таймаутом
+        return self._get_historical_data(
+            contract, end_dt, duration, bar_size, data_type, use_rth
+        )
+
+    def _get_historical_data(
         self,
         contract: Contract,
         end_dt: str,

@@ -17,7 +17,7 @@ class IBClient(EWrapper, EClient):
         EClient.__init__(self, self)
         self.order_status = {}
         self.nextValidOrderId = -1
-        self.account_id = None
+        self.account_id: str = ""
         self.values = {}
         self.tws_time = datetime.min
 
@@ -51,10 +51,10 @@ class IBClient(EWrapper, EClient):
             self, orderId, status, filled, remaining, avgFillPrice,
             permId, parentId, lastFillPrice, clientId, whyHeld, mktCapPrice
         ):
-        print(
-            f"Order status updated for order ID {orderId}: "
-            f"clientId={clientId}, status={status}, filled={filled}, "
-            f"remaining={remaining}, permId={permId}"
+        log.info(
+            f"orderStatus, ID: {orderId}: clientId={clientId}, "
+            f"status={status}, filled={filled}, remaining={remaining}, "
+            f"permId={permId}, whyHeld={whyHeld}"
         )
 
     def updateAccountValue(self, key, value, currency, accountName):
@@ -72,8 +72,6 @@ class IBClient(EWrapper, EClient):
         """
         pass
         # super().updateAccountTime(timestamp)
-        # TODO: проверить, можно ли использовать для группировки приходящих updateAccountValue
-        # cprint(f"AccountTime: {timestamp}", "yellow")
 
     def orderBound(self, orderId: int, apiClientId: int, apiOrderId: int):
         super().orderBound(orderId, apiClientId, apiOrderId)
