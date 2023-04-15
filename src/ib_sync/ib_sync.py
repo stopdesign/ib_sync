@@ -16,6 +16,7 @@ from .client import IBClient
 log = logging.getLogger("ib_api.ib_sync")
 log.setLevel(logging.INFO)
 
+logging.getLogger("ibapi.utils").setLevel(logging.WARNING)
 logging.getLogger("ibapi.client").setLevel(logging.WARNING)
 logging.getLogger("ibapi.wrapper").setLevel(logging.WARNING)
 
@@ -184,8 +185,8 @@ class IBSync(IBClient):
         errorString: str,
         advancedOrderRejectJson="",
     ):
-        if errorCode in [2104, 2106, 2107, 2119, 2158]:
-            # Это не ошибки, а сообщения connection is OK
+        if errorCode in [2104, 2106, 2107, 2119, 2158, 2100]:
+            # Это не ошибки, а сообщения connection is OK и другое
             log.info(errorString)
         else:
             # TODO: сделать универсальный механизм для всех видов данных
@@ -242,6 +243,11 @@ class IBSync(IBClient):
 
     def updateAccountValue(self, key: str, value: str, currency: str, accountName: str):
         super().updateAccountValue(key, value, currency, accountName)
+        # FIXME: для проверки. Убрать по результатам.
+        # If an accountReady value of false is returned that
+        # means that the IB server is in the process of resetting
+        if key == "accountReady":
+            log.error(f"accountReady: {value}")
         if not self._account_info.finished and accountName == self.account_id:
             self._account_info.append(
                 {
