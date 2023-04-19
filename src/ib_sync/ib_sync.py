@@ -3,6 +3,7 @@ import random
 import time
 from dataclasses import dataclass
 from decimal import Decimal
+from datetime import datetime, date, timedelta
 
 from timeout_decorator import timeout
 
@@ -23,6 +24,23 @@ logging.getLogger("ibapi.wrapper").setLevel(logging.WARNING)
 
 TIMEOUT = 5
 TIMEOUT_HISTORICAL = 150
+
+
+def parse_futures_ticker(local_symbol, decade=None) -> tuple[str, date]:
+    symbol = local_symbol[:-2]
+    year = int(local_symbol[-1])
+    months = "FGHJKMNQUVXZ"
+    if decade:
+        year += decade
+    else:
+        # 2017, 2018, 2019, 2020, 2021, ... 2026
+        if year <= 6:
+            year += 2020
+        else:
+            year += 2010
+    month = months.index(local_symbol[-2]) + 1
+    expiration = datetime(year, month, 10).date()
+    return symbol, expiration
 
 
 @dataclass
@@ -107,9 +125,45 @@ class IBSync(IBClient):
             sid = f"{exchange}_{symbol}"
 
         if contract.secType == "FUT":
-            sid = f"{exchange}_{symbol}"
-            exp_str = contract.lastTradeDateOrContractMonth
-            sid += "_" + exp_str[2:6]
+            if not exchange:
+                # Попытка вычислить биржу для известных тикеров
+                if symbol in [
+                    "CL",
+                    "GC",
+                    "HG",
+                    "MCL",
+                    "MYM",
+                    "NG",
+                    "PA",
+                    "PL",
+                    "QG",
+                    "SI",
+                    "YM",
+                ]:
+                    exchange = "NYMEX"
+                if len(symbol) == 2 and symbol[0] == "Z":
+                    exchange = "CBOT"
+                if symbol in ["ES", "MES", "NQ", "MNQ"]:
+                    exchange = "CME"
+            try:
+                _, exp_dt = parse_futures_ticker(contract.localSymbol)
+                exp_str = exp_dt.strftime("%y%m")
+            except:
+                exp_str = contract.lastTradeDateOrContractMonth
+                if len(exp_str) == 8:
+                    exp_dt = datetime.strptime(exp_str, "%Y%m%d").date()
+                    # Контракты с датой экспирации в конце месяца
+                    # почему-то называются по следующему месяцу.
+                    if exp_dt.day > 22:
+                        exp_dt += timedelta(days=10)
+                    exp_str = exp_dt.strftime("%y%m")
+                elif len(exp_str) == 6:
+                    exp_dt = datetime.strptime(exp_str, "%Y%m").date()
+                    exp_str = exp_dt.strftime("%y%m")
+                else:
+                    exp_str = exp_str[-4:]
+
+            sid = f"{exchange}_{symbol}_{exp_str}"
 
         if contract.secType == "CRYPTO":
             sid = f"{exchange}_{symbol}"
