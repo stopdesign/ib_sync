@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name="ib_sync",
-    version="0.1.4",
+    version="0.1.5",
     url="https://github.com/stopdesign/ib_sync.git",
     author="IBKR and Gregory",
     description="IBKR API Client",
@@ -10,6 +10,5 @@ setup(
     package_dir={"": "src"},
     install_requires=[
         "termcolor~=1.1",
-        "timeout_decorator",
     ],
 )
