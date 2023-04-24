@@ -1,14 +1,13 @@
 import logging
 import random
-import time
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
+from datetime import date, datetime, timedelta
 from decimal import Decimal
-from datetime import datetime, date, timedelta
-
-from timeout_decorator import timeout
+from time import monotonic, sleep
 
 from ibapi.common import BarData, TickerId
-from ibapi.contract import Contract, ContractDetails
+from ibapi.contract import Contract as IbContract
+from ibapi.contract import ContractDetails
 from ibapi.execution import ExecutionFilter
 
 from .client import IBClient
@@ -22,8 +21,109 @@ logging.getLogger("ibapi.client").setLevel(logging.WARNING)
 logging.getLogger("ibapi.wrapper").setLevel(logging.WARNING)
 
 
-TIMEOUT = 5
-TIMEOUT_HISTORICAL = 150
+TIMEOUT = 5.0
+TIMEOUT_SHORT = 2.0
+
+
+def dataclassNonDefaults(obj) -> dict:
+    """
+    For a ``dataclass`` instance get the fields that are different from the
+    default values and return as ``dict``.
+    """
+    if not is_dataclass(obj):
+        raise TypeError(f"Object {obj} is not a dataclass")
+    values = [getattr(obj, field.name) for field in fields(obj)]
+    return {
+        field.name: value
+        for field, value in zip(fields(obj), values)
+        if value != field.default
+        and value == value
+        and not (isinstance(value, list) and value == [])
+    }
+
+
+@dataclass
+class Contract(IbContract):
+    secType: str = ""
+    conId: int = 0
+    symbol: str = ""
+    lastTradeDateOrContractMonth: str = ""
+    strike: float = 0.0
+    right: str = ""
+    multiplier: str = ""
+    exchange: str = ""
+    primaryExchange: str = ""
+    currency: str = ""
+    localSymbol: str = ""
+    tradingClass: str = ""
+    includeExpired: bool = False
+    secIdType: str = ""
+    secId: str = ""
+    description: str = ""
+    issuerId: str = ""
+    comboLegsDescrip: str = ""
+    comboLegs: None = None
+    deltaNeutralContract: None = None
+
+    def __eq__(self, other):
+        if not isinstance(other, Contract):
+            return False
+        if bool(self.conId) and self.conId == other.conId:
+            return True
+        return hash(self) == hash(other)
+
+    def __hash__(self):
+        if self.conId:
+            # CONTFUT gets the same conId as the front contract, invert it here
+            h = self.conId if self.secType == "CONTFUT" else -self.conId
+        else:
+            self_str = (
+                "{secType}-{conId}-{symbol}-{lastTradeDateOrContractMonth}-"
+                "{exchange}-{primaryExchange}-{currency}-{localSymbol}"
+            ).format(**self.__dict__)
+            h = hash(self_str)
+        return h
+
+    def __repr__(self):
+        # attrs = self.__dict__
+        attrs = dataclassNonDefaults(self)
+        attrs.pop("details", "")
+        attrs.pop("tradingClass", "")
+        clsName = self.__class__.__qualname__
+        kwargs = ", ".join(f"{k}={v!r}" for k, v in attrs.items())
+        return f"{clsName}({kwargs})"
+
+    __str__ = __repr__
+
+
+class Timeout(AssertionError):
+
+    """Thrown when a timeout occurs in the `timeout` context manager."""
+
+    def __init__(self, value="Timed Out"):
+        self.value = value
+
+    def __str__(self):
+        return repr(self.value)
+
+
+class Timer:
+    def __init__(self, timeout: float = TIMEOUT):
+        self.timeout = timeout
+
+    def __enter__(self):
+        self.start_time = monotonic()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if monotonic() - self.start_time > self.timeout:
+            raise Timeout(f"Execution time exceeded {self.timeout} seconds")
+
+    def wait(self, delay: float = 0.001) -> bool:
+        sleep(delay)
+        if monotonic() - self.start_time > self.timeout:
+            raise Timeout(f"Execution time exceeded {self.timeout} seconds")
+        return True
 
 
 def parse_futures_ticker(local_symbol, decade=None) -> tuple[str, date]:
@@ -94,6 +194,8 @@ class IBSync(IBClient):
         self._account_info = Results()
         self._portfolio = Results()
 
+        self._cached_details = {}
+
         # TODO: приделать протухание
         self._orders_by_pid = {}
         self._positions_by_conid = {}
@@ -108,43 +210,12 @@ class IBSync(IBClient):
 
         exchange = exchange.replace("ISLAND", "NASDAQ")
 
-        # FIXME: Это полная ерунда, но пока другое не придумал.
-        if exchange == "QBALGO":
-            if symbol[0] == "Z":
-                exchange = "CBOT"  # зерновые фьючерсы
-            else:
-                exchange = "NYMEX"  # нефть, газ
-        # FIXME:
-        if exchange == "SMART":
-            if symbol in ["URA", "COPX", "REMX", "SPY"]:
-                exchange = "ARCA"
-
         sid = f"{exchange}_{symbol}"
 
         if contract.secType == "STK":
             sid = f"{exchange}_{symbol}"
 
-        if contract.secType == "FUT":
-            if not exchange:
-                # Попытка вычислить биржу для известных тикеров
-                if symbol in [
-                    "CL",
-                    "GC",
-                    "HG",
-                    "MCL",
-                    "MYM",
-                    "NG",
-                    "PA",
-                    "PL",
-                    "QG",
-                    "SI",
-                    "YM",
-                ]:
-                    exchange = "NYMEX"
-                if len(symbol) == 2 and symbol[0] == "Z":
-                    exchange = "CBOT"
-                if symbol in ["ES", "MES", "NQ", "MNQ"]:
-                    exchange = "CME"
+        elif contract.secType == "FUT":
             try:
                 _, exp_dt = parse_futures_ticker(contract.localSymbol)
                 exp_str = exp_dt.strftime("%y%m")
@@ -165,10 +236,10 @@ class IBSync(IBClient):
 
             sid = f"{exchange}_{symbol}_{exp_str}"
 
-        if contract.secType == "CRYPTO":
+        elif contract.secType == "CRYPTO":
             sid = f"{exchange}_{symbol}"
 
-        if contract.secType == "CASH":
+        elif contract.secType == "CASH":
             local_symbol = str(contract.localSymbol)
             sid = f"{exchange}_{local_symbol}"
 
@@ -253,6 +324,10 @@ class IBSync(IBClient):
                 self._open_orders.error = errorString
                 self._open_orders.finish()
 
+            if reqId > 0 and reqId == self._contract_details.r_id:
+                self._contract_details.error = errorString
+                self._contract_details.finish()
+
             # Стандартная ошибка слишком длинная
             if errorCode == 502:
                 errorString = "Couldn't connect to TWS"
@@ -265,7 +340,6 @@ class IBSync(IBClient):
     ##########################
     ### Account
 
-    @timeout(TIMEOUT)
     def get_account_info(self) -> tuple[dict, list[Position]]:
         if not self.account_id:
             return {}, []
@@ -275,11 +349,15 @@ class IBSync(IBClient):
 
         self.reqAccountUpdates(True, self.account_id)
 
-        while not (self._account_info.finished and self._portfolio.finished):
-            time.sleep(0.001)
+        with Timer() as t:
+            while not (self._account_info.finished and self._portfolio.finished):
+                t.wait()
 
         # Представляете, так выглядит отписка!
         self.reqAccountUpdates(False, self.account_id)
+
+        for position in self._portfolio:
+            self.qualify_contract(position.contract)
 
         # Распарсить ответы
         account_fields = {}
@@ -356,14 +434,17 @@ class IBSync(IBClient):
     ##########################
     ### Positions
 
-    @timeout(TIMEOUT)
     def get_positions(self) -> list[tuple]:
         self._positions_by_conid = {}
         self._positions = Results()
         self.reqPositions()
 
-        while not self._positions.finished:
-            time.sleep(0.001)
+        with Timer() as t:
+            while not self._positions.finished:
+                t.wait()
+
+        for _, contract, _, _ in self._positions:
+            self.qualify_contract(contract)
 
         return list(self._positions)
 
@@ -384,21 +465,23 @@ class IBSync(IBClient):
     ##########################
     ### Orders
 
-    @timeout(TIMEOUT)
     def place_order(self, contract, order):
         r_id = order.orderId
         self._open_orders = Results(r_id)
         self.placeOrder(r_id, contract, order)
 
-        while not (self._open_orders.finished or self._open_orders):
-            time.sleep(0.001)
+        with Timer() as t:
+            while not (self._open_orders.finished or self._open_orders):
+                t.wait()
+
+        for contract, _, _ in self._open_orders:
+            self.qualify_contract(contract)
 
         if self._open_orders.error:
             raise Exception(self._open_orders.error)
         else:
             return list(self._open_orders)[0]
 
-    @timeout(TIMEOUT)
     def get_orders(self):
         self._open_orders = Results()
         self._completed_orders = Results()
@@ -406,8 +489,15 @@ class IBSync(IBClient):
         self.reqAllOpenOrders()  # not a subscription
         self.reqCompletedOrders(apiOnly=False)  # not a subscription
 
-        while not (self._open_orders.finished and self._completed_orders.finished):
-            time.sleep(0.001)
+        with Timer() as t:
+            while not (self._open_orders.finished and self._completed_orders.finished):
+                t.wait()
+
+        for contract, _, _ in self._open_orders:
+            self.qualify_contract(contract)
+
+        for contract, _, _ in self._completed_orders:
+            self.qualify_contract(contract)
 
         return list(self._open_orders + self._completed_orders)
 
@@ -440,13 +530,17 @@ class IBSync(IBClient):
     ##########################
     ### Executions
 
-    @timeout(TIMEOUT)
     def get_executions(self):
         self._executions = Results()
+
         self.reqExecutions(self.r_id, ExecutionFilter())
 
-        while not self._executions.finished:
-            time.sleep(0.001)
+        with Timer() as t:
+            while not self._executions.finished:
+                t.wait()
+
+        for contract, _ in self._executions:
+            self.qualify_contract(contract)
 
         return list(self._executions)
 
@@ -462,16 +556,17 @@ class IBSync(IBClient):
     ##########################
     ### Contracts
 
-    @timeout(TIMEOUT)
     def get_contract_details(self, contract: Contract) -> list[ContractDetails]:
-        self._contract_details = Results()
         if contract.exchange == "NASDAQ":
             contract.exchange = "ISLAND"
         if contract.primaryExchange == "NASDAQ":
             contract.primaryExchange = "ISLAND"
-        self.reqContractDetails(self.r_id, contract)
-        while not self._contract_details.finished:
-            time.sleep(0.001)
+        r_id = self.r_id
+        self._contract_details = Results(r_id)
+        self.reqContractDetails(r_id, contract)
+        with Timer() as t:
+            while not self._contract_details.finished:
+                t.wait()
         return list(self._contract_details)
 
     def contractDetails(self, reqId: int, contractDetails: ContractDetails):
@@ -483,10 +578,67 @@ class IBSync(IBClient):
         # super().contractDetailsEnd(reqId)
         self._contract_details.finish()
 
+    def _get_cached_details(self, contract: Contract) -> list[ContractDetails]:
+        if contract.conId:
+            c = Contract(conId=contract.conId)
+        else:
+            c = Contract(**contract.__dict__)
+            c.includeExpired = True
+
+        if hash(c) in self._cached_details:
+            return self._cached_details[hash(c)]
+
+        r_id = self.r_id
+        self._contract_details = Results(r_id)
+        self.reqContractDetails(r_id, c)
+        with Timer(TIMEOUT_SHORT) as t:
+            while not self._contract_details.finished:
+                t.wait()
+
+        result = list(self._contract_details)
+
+        self._cached_details[hash(c)] = result
+
+        return result
+
+    def qualify_contract(self, contract: Contract) -> Contract:
+        """
+        IB возвращает контракты с пустыми полями, нужно их заполнять.
+        """
+        if getattr(contract, "details", None):
+            return contract
+
+        details = self._get_cached_details(contract)
+
+        if not details:
+            raise ValueError(f"Unknown contract: {contract}")
+
+        elif len(details) > 1:
+            v = [d.contract.conId for d in details]
+            raise ValueError(f"Ambiguous contract: {contract}, variants: {v}")
+
+        else:
+            c = details[0].contract
+
+            if expiry := c.lastTradeDateOrContractMonth:
+                # remove time and timezone part as it will cause problems
+                expiry = expiry.split()[0]
+                c.lastTradeDateOrContractMonth = expiry
+
+            if contract.exchange == "SMART":
+                # overwriting 'SMART' exchange can create invalid contract
+                c.exchange = contract.exchange
+
+            for k, v in c.__dict__.items():
+                setattr(contract, k, v)
+
+            setattr(contract, "details", details[0])
+
+        return contract
+
     ##########################
     ### History
 
-    @timeout(TIMEOUT)
     def get_historical_data(
         self,
         contract: Contract,
@@ -495,34 +647,7 @@ class IBSync(IBClient):
         bar_size: str = "1 min",
         data_type: str = "TRADES",
         use_rth: int = 0,
-    ):
-        return self._get_historical_data(
-            contract, end_dt, duration, bar_size, data_type, use_rth
-        )
-
-    @timeout(TIMEOUT_HISTORICAL)
-    def get_old_historical_data(
-        self,
-        contract: Contract,
-        end_dt: str,
-        duration: str = "300 S",
-        bar_size: str = "1 min",
-        data_type: str = "TRADES",
-        use_rth: int = 0,
-    ):
-        # Тот же метод, но с большим таймаутом
-        return self._get_historical_data(
-            contract, end_dt, duration, bar_size, data_type, use_rth
-        )
-
-    def _get_historical_data(
-        self,
-        contract: Contract,
-        end_dt: str,
-        duration: str = "300 S",
-        bar_size: str = "1 min",
-        data_type: str = "TRADES",
-        use_rth: int = 0,
+        timeout: float = TIMEOUT,
     ):
         """
         End Date/Time: The date, time, or time-zone entered is invalid.
@@ -551,8 +676,9 @@ class IBSync(IBClient):
             chartOptions=[],
         )
 
-        while not self._historical_data.finished:
-            time.sleep(0.001)
+        with Timer(timeout) as t:
+            while not self._historical_data.finished:
+                t.wait()
 
         if self._historical_data.error:
             if "query returned no data" in self._historical_data.error:
@@ -575,14 +701,14 @@ class IBSync(IBClient):
     ##########################
     ### Contract head date
 
-    @timeout(TIMEOUT)
     def get_head_timestamp(self, contract, whatToShow="TRADES", useRTH=0, formatDate=2):
         # даты для BID/ASK иногда нет (например, CL.NYMEX)
         self._head_timestamp = Results()
         self.reqHeadTimeStamp(self.r_id, contract, whatToShow, useRTH, formatDate)
 
-        while not self._head_timestamp.finished:
-            time.sleep(0.001)
+        with Timer() as t:
+            while not self._head_timestamp.finished:
+                t.wait()
 
         return list(self._head_timestamp)[0]
 
