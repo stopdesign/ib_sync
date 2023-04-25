@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name="ib_sync",
-    version="0.1.5",
+    version="0.1.6",
     url="https://github.com/stopdesign/ib_sync.git",
     author="IBKR and Gregory",
     description="IBKR API Client",

@@ -1,10 +1,12 @@
 import logging
+import queue
 import random
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from time import monotonic, sleep
 
+from ibapi.comm import read_fields
 from ibapi.common import BarData, TickerId
 from ibapi.contract import Contract as IbContract
 from ibapi.contract import ContractDetails
@@ -75,14 +77,15 @@ class Contract(IbContract):
     def __hash__(self):
         if self.conId:
             # CONTFUT gets the same conId as the front contract, invert it here
-            h = self.conId if self.secType == "CONTFUT" else -self.conId
+            h = self.conId if self.secType != "CONTFUT" else -self.conId
         else:
             self_str = (
                 "{secType}-{conId}-{symbol}-{lastTradeDateOrContractMonth}-"
                 "{exchange}-{primaryExchange}-{currency}-{localSymbol}"
             ).format(**self.__dict__)
             h = hash(self_str)
-        return h
+        # log.info(f"conid, {self.conId}, h: {h}")
+        return int(h)
 
     def __repr__(self):
         # attrs = self.__dict__
@@ -493,13 +496,54 @@ class IBSync(IBClient):
             while not (self._open_orders.finished and self._completed_orders.finished):
                 t.wait()
 
+        # qualify_contract происходят здесь,
+        # т.к. openOrder вызывается другим потоком,
+        # который заблокируется при любом запросе к IB
+
         for contract, _, _ in self._open_orders:
             self.qualify_contract(contract)
 
         for contract, _, _ in self._completed_orders:
             self.qualify_contract(contract)
 
+        for perm_id in self._orders_by_pid.keys():
+            _, contract, _ = self._orders_by_pid[perm_id]
+            self.qualify_contract(contract)
+
         return list(self._open_orders + self._completed_orders)
+
+    def orderStatus(
+        self,
+        orderId,
+        status: str,
+        filled: Decimal,
+        remaining: Decimal,
+        avgFillPrice: float,
+        permId: int,
+        parentId: int,
+        lastFillPrice: float,
+        clientId: int,
+        whyHeld: str,
+        mktCapPrice: float,
+    ):
+        """
+        Событие orderStatus приходит, когда меняется статус ордера,
+        и после любых изменений ордера. Но событие не содержит ордер
+        и контракт. Это добывается из сохраненных событий openOrder.
+
+        В openOrder приходят данные ордера и контракта, но нет
+        оставшегося количества.
+        """
+        if permId and permId in self._orders_by_pid:
+            order, contract, state = self._orders_by_pid[permId]
+            state.status = status
+            self.qualify_contract(contract)  # надеюсь, что это будет из кэша
+            self._orders_by_pid[permId] = order, contract, state
+        else:
+            log.error(
+                f"Order not found in cache, perm: {permId}, "
+                f"client: {clientId}, oid: {orderId}"
+            )
 
     def openOrder(self, orderId, contract, order, orderState):
         super().openOrder(orderId, contract, order, orderState)
@@ -562,21 +606,55 @@ class IBSync(IBClient):
         if contract.primaryExchange == "NASDAQ":
             contract.primaryExchange = "ISLAND"
         r_id = self.r_id
+
         self._contract_details = Results(r_id)
+
+        messages = []
         self.reqContractDetails(r_id, contract)
         with Timer() as t:
             while not self._contract_details.finished:
-                t.wait()
+                # Здесь у нас свой разбор очереди ответов IB.
+                # Обычно очередь разбирается в отдельном потоке,
+                # но иногда он занят. get_contract_details нужно
+                # уметь вызывать даже из потока обработки очереди.
+                try:
+                    text = self.msg_queue.get(block=True, timeout=0.2)
+                except queue.Empty:
+                    pass
+                else:
+                    fields = read_fields(text)
+                    if fields[0] == b"10" and fields[1] == str(r_id).encode():
+                        self.decoder.interpret(fields)  # type: ignore
+                    elif fields[0] == b"52" and fields[2] == str(r_id).encode():
+                        self.decoder.interpret(fields)  # type: ignore
+                        break
+                    else:
+                        messages.append(text)
+                t.wait(0.001)  # чтобы поток успел обработать предыдущее
+
+        # Вернуть перехваченные чужие сообщения в очередь
+        for message in messages:
+            self.msg_queue.put(message, block=True, timeout=0.1)
+
         return list(self._contract_details)
 
     def contractDetails(self, reqId: int, contractDetails: ContractDetails):
-        # super().contractDetails(reqId, contractDetails)
-        if not self._contract_details.finished:
+        # Все результаты кешируются по conId
+        c = Contract(**contractDetails.contract.__dict__)
+        h = hash(c)
+        if h not in self._cached_details:
+            # log.warning(f"Save in cache: {c.conId}, {c.symbol}, {c.localSymbol}, h: {h}")
+            self._cached_details[h] = [contractDetails]
+
+        if self._contract_details.r_id == reqId and not self._contract_details.finished:
             self._contract_details.append(contractDetails)
 
     def contractDetailsEnd(self, reqId: int):
-        # super().contractDetailsEnd(reqId)
-        self._contract_details.finish()
+        # FIXME: без паузы может получиться так, что finish наступит раньше
+        # FIXME: чем закончится обработка contractDetails в другом потоке.
+        sleep(0.01)
+        if self._contract_details.r_id == reqId:
+            self._contract_details.finish()
 
     def _get_cached_details(self, contract: Contract) -> list[ContractDetails]:
         if contract.conId:
@@ -588,16 +666,9 @@ class IBSync(IBClient):
         if hash(c) in self._cached_details:
             return self._cached_details[hash(c)]
 
-        r_id = self.r_id
-        self._contract_details = Results(r_id)
-        self.reqContractDetails(r_id, c)
-        with Timer(TIMEOUT_SHORT) as t:
-            while not self._contract_details.finished:
-                t.wait()
+        log.warning(f"MISS: {c}, h: {hash(c)}")
 
-        result = list(self._contract_details)
-
-        self._cached_details[hash(c)] = result
+        result = self.get_contract_details(c)
 
         return result
 

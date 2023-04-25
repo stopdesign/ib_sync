@@ -111,7 +111,7 @@ class IBClient(EWrapper, EClient):
 class IBThread(threading.Thread):
     def __init__(self, app):
         self.app = app
-        super().__init__(target=self.run, daemon=True)
+        super().__init__(target=self.run, daemon=True, name="IBThread")
 
     def run(self):
         log.info("Run Message Thread")
