@@ -193,6 +193,7 @@ class IBSync(IBClient):
         self._contract_details = Results()
         self._historical_data = Results()
         self._head_timestamp = Results()
+        self._next_order_id = Results()
 
         self._account_info = Results()
         self._portfolio = Results()
@@ -302,6 +303,23 @@ class IBSync(IBClient):
             return contract
         else:
             raise Exception(f"Can't make a contract from SID: {sid}")
+
+    ##########################
+    ### Next Order ID
+
+    def get_next_order_id(self):
+        r_id = self.r_id
+        self._next_order_id = Results(r_id)
+        self.reqIds(r_id)
+        with Timer(TIMEOUT_SHORT) as t:
+            while not self._next_order_id.finished:
+                t.wait()
+        self.nextValidOrderId += 1
+        return self.nextValidOrderId - 1
+
+    def nextValidId(self, orderId):
+        self.nextValidOrderId = orderId
+        self._next_order_id.finish()
 
     ##########################
     ### Errors
