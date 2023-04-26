@@ -169,7 +169,8 @@ class Results(list):
     def __init__(self, r_id: int = 0):
         self.r_id = r_id
         self.finished = False
-        self.error = ""
+        self.code: int = 0
+        self.error: str = ""
 
     def finish(self, r_id: int = 0):
         self.finished = True
@@ -338,14 +339,17 @@ class IBSync(IBClient):
             # TODO: сделать универсальный механизм для всех видов данных
             # Остановить запрос, если такой есть
             if reqId > 0 and reqId == self._historical_data.r_id:
+                self._historical_data.code = errorCode
                 self._historical_data.error = errorString
                 self._historical_data.finish()
 
             if reqId > 0 and reqId == self._open_orders.r_id:
+                self._open_orders.code = errorCode
                 self._open_orders.error = errorString
                 self._open_orders.finish()
 
             if reqId > 0 and reqId == self._contract_details.r_id:
+                self._contract_details.code = errorCode
                 self._contract_details.error = errorString
                 self._contract_details.finish()
 
@@ -499,6 +503,7 @@ class IBSync(IBClient):
             self.qualify_contract(contract)
 
         if self._open_orders.error:
+            # TODO: передать code и msg
             raise Exception(self._open_orders.error)
         else:
             return list(self._open_orders)[0]
