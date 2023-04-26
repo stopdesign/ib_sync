@@ -535,6 +535,24 @@ class IBSync(IBClient):
 
         return list(self._open_orders + self._completed_orders)
 
+    def get_completed_api_orders(self):
+        self._completed_orders = Results()
+
+        self.reqCompletedOrders(apiOnly=True)  # not a subscription
+
+        with Timer() as t:
+            while not self._completed_orders.finished:
+                t.wait()
+
+        for contract, _, _ in self._completed_orders:
+            self.qualify_contract(contract)
+
+        for perm_id in self._orders_by_pid.keys():
+            _, contract, _ = self._orders_by_pid[perm_id]
+            self.qualify_contract(contract)
+
+        return list(self._completed_orders)
+
     def orderStatus(
         self,
         orderId,
