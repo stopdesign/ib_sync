@@ -713,7 +713,7 @@ class IBSync(IBClient):
 
         return result
 
-    def qualify_contract(self, contract: Contract) -> Contract:
+    def qualify_contract(self, contract: Contract, keep_exchange=False) -> Contract:
         """
         IB возвращает контракты с пустыми полями, нужно их заполнять.
         """
@@ -737,7 +737,9 @@ class IBSync(IBClient):
                 expiry = expiry.split()[0]
                 c.lastTradeDateOrContractMonth = expiry
 
-            if contract.exchange == "SMART":
+            # Выключил по умолчанию. Контракт ZW приходил с биржей SMART.
+            # Если будут проблемы, можно добавить параметр keep_exchange.
+            if keep_exchange:
                 # overwriting 'SMART' exchange can create invalid contract
                 c.exchange = contract.exchange
 
