@@ -1,3 +1,4 @@
+import inspect
 import logging
 import queue
 import random
@@ -99,19 +100,10 @@ class Contract(IbContract):
     __str__ = __repr__
 
 
-class Timeout(AssertionError):
-
-    """Thrown when a timeout occurs in the `timeout` context manager."""
-
-    def __init__(self, value="Timed Out"):
-        self.value = value
-
-    def __str__(self):
-        return repr(self.value)
-
-
 class Timer:
     def __init__(self, timeout: float = TIMEOUT):
+        fn = inspect.stack()[1][3]
+        self.err = f"Timeout {timeout} sec in '{fn}' function"
         self.timeout = timeout
 
     def __enter__(self):
@@ -119,13 +111,15 @@ class Timer:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type and exc_type.__name__ == "TimeoutError":
+            return
         if monotonic() - self.start_time > self.timeout:
-            raise Timeout(f"Execution time exceeded {self.timeout} seconds")
+            raise TimeoutError(self.err)
 
     def wait(self, delay: float = 0.001) -> bool:
         sleep(delay)
         if monotonic() - self.start_time > self.timeout:
-            raise Timeout(f"Execution time exceeded {self.timeout} seconds")
+            raise TimeoutError(self.err)
         return True
 
 
