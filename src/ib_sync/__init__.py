@@ -1,4 +1,4 @@
-from .client import IBClient, IBThread, IbContract
-from .ib_sync import IBSync, Results
+from .client import IBClient, IBThread
+from .ib_sync import Contract, IBSync, Results
 
-__all__ = ["IBClient", "IBThread", "IbContract", "IBSync", "Results"]
+__all__ = ["IBClient", "IBThread", "IBSync", "Results", "Contract"]

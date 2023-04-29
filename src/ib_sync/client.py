@@ -3,7 +3,6 @@ import threading
 from datetime import datetime
 
 from ibapi.client import EClient
-from ibapi.contract import Contract
 from ibapi.wrapper import EWrapper
 
 # Логгер для этого файла
@@ -69,21 +68,3 @@ class IBThread(threading.Thread):
     def run(self):
         log.info("Run Message Thread")
         self.app.run()
-
-
-# Фабрика контрактов
-def IbContract(
-    symbol,
-    secType="STK",
-    exchange="SMART",
-    currency="USD",
-    localSymbol="",
-):
-    contract = Contract()
-    contract.symbol = symbol
-    contract.secType = secType
-    contract.exchange = exchange
-    contract.currency = currency
-    if secType == "FUT":
-        contract.localSymbol = localSymbol
-    return contract
