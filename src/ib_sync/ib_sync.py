@@ -842,7 +842,7 @@ class IBSync(IBClient):
             chartOptions=[],
         )
 
-        request.wait()
+        request.wait(timeout)
 
         if request.error:
             if "query returned no data" in request.error:
