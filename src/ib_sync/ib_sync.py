@@ -102,7 +102,10 @@ class Contract(IbContract):
 
 class Timer:
     def __init__(self, timeout: float = TIMEOUT):
-        fn = inspect.stack()[1][3]
+        stack = inspect.stack()
+        fn = stack[1][3]
+        if fn == "wait" and len(stack) > 2:
+            fn = stack[2][3]
         self.err = f"Timeout {timeout} sec in '{fn}' function"
         self.timeout = timeout
 
