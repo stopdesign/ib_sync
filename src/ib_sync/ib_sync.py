@@ -243,13 +243,6 @@ class Request(list):
 
 
 class IBSync(IBClient):
-    """
-    Positions
-    Executions (execDetails + commissionReport)
-    Open + Completed Orders
-
-    TODO: добавить остановку ожидания Results при ошибке с данным r_id.
-    """
 
     def __init__(self):
         super().__init__()
