@@ -547,8 +547,6 @@ class IBSync(IBClient):
     def place_order(self, contract, order):
         request = self.results.request("place_order", id=order.orderId)
 
-        log.info(f"Place order, id: {request.id}")
-
         self.placeOrder(request.id, contract, order)
 
         with Timer() as t:
