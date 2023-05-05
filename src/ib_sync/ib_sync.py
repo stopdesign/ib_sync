@@ -25,7 +25,6 @@ logging.getLogger("ibapi.wrapper").setLevel(logging.WARNING)
 
 
 TIMEOUT = 5.0
-TIMEOUT_SHORT = 2.0
 
 
 def dataclassNonDefaults(obj) -> dict:
