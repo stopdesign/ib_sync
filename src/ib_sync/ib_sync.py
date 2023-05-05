@@ -152,7 +152,63 @@ class Position:
     realized_pnl: float = float("NaN")
 
 
-class Results(list):
+class Results:
+    """
+    list с фильтрами.
+    """
+
+    def __init__(self) -> None:
+        self.requests_by_id: dict[int, Request] = {}
+
+    def request(self, type: str, id: int = 0):
+        # Удалить слишком старые запросы, если накопились
+        if len(self.requests_by_id) > 10:
+            old = datetime.utcnow() - timedelta(minutes=10)
+            for key, request in list(self.requests_by_id.items()):
+                if request.started_at < old:
+                    del self.requests_by_id[key]
+        # Новый запрос
+        if not id:
+            id = random.randint(10000000, 99999999)
+        # log.info(f"Start {type}, {id}")
+        self.requests_by_id[id] = Request(type, id)
+        return self.requests_by_id[id]
+
+    def active(self, type: str | None = None) -> list["Request"]:
+        return self.filter(type=type, finished=False)
+
+    def get(self, id: int = 0) -> "Request":
+        return self.requests_by_id.get(id, Request())
+
+    def finish(self, type: str | None = None) -> None:
+        for r in self.filter(type=type):
+            r.finish()
+
+    def filter(
+        self,
+        id: int | None = None,
+        finished: bool | None = None,
+        type: str | None = None,
+        before: datetime | None = None,
+    ) -> list["Request"]:
+        res = list(self.requests_by_id.values())
+
+        if id is not None:
+            res = [o for o in res if o.id == id]
+
+        if finished is not None:
+            res = [o for o in res if o.finished == finished]
+
+        if type is not None:
+            res = [o for o in res if o.type == type]
+
+        if before is not None:
+            res = [o for o in res if o.started_at < before]
+
+        return res
+
+
+class Request(list):
     """
     TWS возвращает данные частями, асинхронно.
     Results хранит результаты, пока ответ не завершен.
@@ -160,13 +216,29 @@ class Results(list):
     Группа ответов идентифицируется по r_id.
     """
 
-    def __init__(self, r_id: int = 0):
-        self.r_id = r_id
+    def __init__(self, type: str = "", id: int = 0):
+        self.id: int = id
+        self.type: str = type
+        self.started_at: datetime = datetime.utcnow()
         self.finished = False
         self.code: int = 0
         self.error: str = ""
 
-    def finish(self, r_id: int = 0):
+    def __str__(self) -> str:
+        return (
+            f"Request(id={self.id} type={self.type} "
+            f"finished={self.finished} len={len(self)})"
+        )
+
+    def __repr__(self) -> str:
+        return str(self)
+
+    def wait(self, timeout: float = TIMEOUT):
+        with Timer(timeout) as t:
+            while not self.finished:
+                t.wait()
+
+    def finish(self):
         self.finished = True
 
 
@@ -181,17 +253,9 @@ class IBSync(IBClient):
 
     def __init__(self):
         super().__init__()
-        self._open_orders = Results()
-        self._completed_orders = Results()
-        self._positions = Results()
-        self._executions = Results()
-        self._contract_details = Results()
-        self._historical_data = Results()
-        self._head_timestamp = Results()
-        self._next_order_id = Results()
 
-        self._account_info = Results()
-        self._portfolio = Results()
+        # Управление результатами запросов
+        self.results = Results()
 
         self._cached_details = {}
 
@@ -303,18 +367,15 @@ class IBSync(IBClient):
     ### Next Order ID
 
     def get_next_order_id(self):
-        r_id = self.r_id
-        self._next_order_id = Results(r_id)
-        self.reqIds(r_id)
-        with Timer(TIMEOUT_SHORT) as t:
-            while not self._next_order_id.finished:
-                t.wait()
+        request = self.results.request(type="next_order_id")
+        self.reqIds(request.id)
+        request.wait()
         self.nextValidOrderId += 1
         return self.nextValidOrderId - 1
 
     def nextValidId(self, orderId):
         self.nextValidOrderId = orderId
-        self._next_order_id.finish()
+        self.results.finish(type="next_order_id")
 
     ##########################
     ### Errors
@@ -330,22 +391,11 @@ class IBSync(IBClient):
             # Это не ошибки, а сообщения connection is OK и другое
             log.info(errorString)
         else:
-            # TODO: сделать универсальный механизм для всех видов данных
-            # Остановить запрос, если такой есть
-            if reqId > 0 and reqId == self._historical_data.r_id:
-                self._historical_data.code = errorCode
-                self._historical_data.error = errorString
-                self._historical_data.finish()
-
-            if reqId > 0 and reqId == self._open_orders.r_id:
-                self._open_orders.code = errorCode
-                self._open_orders.error = errorString
-                self._open_orders.finish()
-
-            if reqId > 0 and reqId == self._contract_details.r_id:
-                self._contract_details.code = errorCode
-                self._contract_details.error = errorString
-                self._contract_details.finish()
+            # Если не найден такой запрос, то создается пустой
+            request = self.results.get(id=reqId)
+            request.code = errorCode
+            request.error = errorString
+            request.finish()
 
             # Стандартная ошибка слишком длинная
             if errorCode == 502:
@@ -363,24 +413,24 @@ class IBSync(IBClient):
         if not self.account_id:
             return {}, []
 
-        self._account_info = Results()
-        self._portfolio = Results()
+        request_account = self.results.request("account")
+        request_portfolio = self.results.request("portfolio")
 
         self.reqAccountUpdates(True, self.account_id)
 
         with Timer() as t:
-            while not (self._account_info.finished and self._portfolio.finished):
+            while not (request_account.finished and request_portfolio.finished):
                 t.wait()
 
         # Представляете, так выглядит отписка!
         self.reqAccountUpdates(False, self.account_id)
 
-        for position in self._portfolio:
+        for position in request_portfolio:
             self.qualify_contract(position.contract)
 
         # Распарсить ответы
         account_fields = {}
-        for rec in self._account_info:
+        for rec in request_account:
             if rec.get("accountName") != self.account_id:
                 continue
             if rec.get("currency") not in ["", "USD"]:
@@ -390,17 +440,23 @@ class IBSync(IBClient):
             if key and value is not None:
                 account_fields[key] = value
 
-        return account_fields, list(self._portfolio)
+        return account_fields, list(request_portfolio)
 
     def updateAccountValue(self, key: str, value: str, currency: str, accountName: str):
         super().updateAccountValue(key, value, currency, accountName)
+
         # FIXME: для проверки. Убрать по результатам.
         # If an accountReady value of false is returned that
         # means that the IB server is in the process of resetting
         if key == "accountReady":
             log.error(f"accountReady: {value}")
-        if not self._account_info.finished and accountName == self.account_id:
-            self._account_info.append(
+
+        if accountName != self.account_id:
+            return
+
+        if requests := self.results.active(type="account"):
+            # Данные добавляются в последний активный запрос
+            requests[-1].append(
                 {
                     "key": key,
                     "value": value,
@@ -430,122 +486,127 @@ class IBSync(IBClient):
             realizedPNL,
             accountName,
         )
-        if not self._portfolio.finished and accountName == self.account_id:
-            self._portfolio.append(
-                Position(
-                    contract=contract,
-                    amount=position,
-                    market_price=marketPrice,
-                    market_value=marketValue,
-                    av_cost=averageCost,
-                    unrealized_pnl=unrealizedPNL,
-                    realized_pnl=realizedPNL,
-                    account=accountName,
-                )
+
+        if accountName != self.account_id:
+            return
+
+        if requests := self.results.active(type="portfolio"):
+            p = Position(
+                contract=contract,
+                amount=position,
+                market_price=marketPrice,
+                market_value=marketValue,
+                av_cost=averageCost,
+                unrealized_pnl=unrealizedPNL,
+                realized_pnl=realizedPNL,
+                account=accountName,
             )
+            requests[-1].append(p)
 
     def accountDownloadEnd(self, accountName: str):
-        # print("accountDownloadEnd")
         super().accountDownloadEnd(accountName)
-        self._account_info.finish()
-        self._portfolio.finish()
+        self.results.finish(type="account")
+        self.results.finish(type="portfolio")
 
     ##########################
     ### Positions
 
     def get_positions(self) -> list[tuple]:
         self._positions_by_conid = {}
-        self._positions = Results()
+        request = self.results.request(type="positions")
         self.reqPositions()
 
-        with Timer() as t:
-            while not self._positions.finished:
-                t.wait()
+        request.wait()
 
-        for _, contract, _, _ in self._positions:
+        for _, contract, _, _ in request:
             self.qualify_contract(contract)
 
-        return list(self._positions)
+        return list(request)
 
     def position(
         self, account: str, contract: Contract, position: Decimal, avgCost: float
     ):
         super().position(account, contract, position, avgCost)
-        # log.warning(f"position: {contract.conId} {position} {avgCost}")
-        if account == self.account_id:
-            self._positions_by_conid[contract.conId] = (position, avgCost)
-        if not self._positions.finished:
-            self._positions.append((account, contract, position, avgCost))
+
+        if account != self.account_id:
+            return
+
+        self._positions_by_conid[contract.conId] = (position, avgCost)
+
+        if requests := self.results.active(type="positions"):
+            # Данные добавляются в последний активный запрос
+            requests[-1].append((account, contract, position, avgCost))
 
     def positionEnd(self):
         super().positionEnd()
-        self._positions.finish()
+        self.results.finish(type="positions")
 
     ##########################
     ### Orders
 
     def place_order(self, contract, order):
-        r_id = order.orderId
-        self._open_orders = Results(r_id)
-        self.placeOrder(r_id, contract, order)
+        request = self.results.request("place_order", id=order.orderId)
+
+        log.info(f"Place order, id: {request.id}")
+
+        self.placeOrder(request.id, contract, order)
 
         with Timer() as t:
-            while not (self._open_orders.finished or self._open_orders):
+            while not (request.finished or len(request) > 0):
                 t.wait()
 
-        for contract, _, _ in self._open_orders:
+        for contract, _, _ in request:
             self.qualify_contract(contract)
 
-        if self._open_orders.error:
+        if request.error:
             # TODO: передать code и msg
-            raise Exception(self._open_orders.error)
+            raise Exception(request.error)
         else:
-            return list(self._open_orders)[0]
+            return list(request)[0]
 
     def get_orders(self):
-        self._open_orders = Results()
-        self._completed_orders = Results()
-
+        request_open_orders = self.results.request("open_orders")
         self.reqAllOpenOrders()  # not a subscription
-        self.reqCompletedOrders(apiOnly=False)  # not a subscription
+        request_open_orders.wait()
 
-        with Timer() as t:
-            while not (self._open_orders.finished and self._completed_orders.finished):
-                t.wait()
+        request_completed_orders = self.results.request("completed_orders")
+        self.reqCompletedOrders(apiOnly=False)  # not a subscription
+        request_completed_orders.wait()
 
         # qualify_contract происходят здесь,
         # т.к. openOrder вызывается другим потоком,
         # который заблокируется при любом запросе к IB
 
-        for contract, _, _ in self._open_orders:
+        for contract, _, _ in request_open_orders:
             self.qualify_contract(contract)
 
-        for contract, _, _ in self._completed_orders:
+        for contract, _, _ in request_completed_orders:
             self.qualify_contract(contract)
 
         for perm_id in self._orders_by_pid.keys():
             _, contract, _ = self._orders_by_pid[perm_id]
             self.qualify_contract(contract)
 
-        return list(self._open_orders + self._completed_orders)
+        return list(request_open_orders + request_completed_orders)
 
     def get_completed_api_orders(self):
-        self._completed_orders = Results()
+        """
+        На самом деле не apiOnly, чтобы не испортить "completed_orders".
+        """
+        request = self.results.request("completed_orders")
+        self.reqCompletedOrders(apiOnly=False)  # not a subscription
+        request.wait()
 
-        self.reqCompletedOrders(apiOnly=True)  # not a subscription
+        request.wait()
 
-        with Timer() as t:
-            while not self._completed_orders.finished:
-                t.wait()
-
-        for contract, _, _ in self._completed_orders:
+        for contract, _, _ in request:
             self.qualify_contract(contract)
 
         for perm_id in self._orders_by_pid.keys():
             _, contract, _ = self._orders_by_pid[perm_id]
             self.qualify_contract(contract)
 
-        return list(self._completed_orders)
+        return list(request)
 
     def orderStatus(
         self,
@@ -582,8 +643,15 @@ class IBSync(IBClient):
 
     def openOrder(self, orderId, contract, order, orderState):
         super().openOrder(orderId, contract, order, orderState)
-        if not self._open_orders.finished:
-            self._open_orders.append((contract, order, orderState))
+
+        # Ответ на place_order можно найти по id
+        request = self.results.get(id=orderId)
+
+        if not request.id:
+            # Ответ на open_orders - по типу
+            if requests := self.results.active(type="open_orders"):
+                request = requests[-1]
+        request.append((contract, order, orderState))
         if order.permId:
             self._orders_by_pid[order.permId] = order, contract, orderState
         else:
@@ -591,8 +659,9 @@ class IBSync(IBClient):
 
     def completedOrder(self, contract, order, orderState):
         super().completedOrder(contract, order, orderState)
-        if not self._completed_orders.finished:
-            self._completed_orders.append((contract, order, orderState))
+        if requests := self.results.active(type="completed_orders"):
+            # Данные добавляются в последний активный запрос
+            requests[-1].append((contract, order, orderState))
         if order.permId:
             self._orders_by_pid[order.permId] = order, contract, orderState
         else:
@@ -600,96 +669,92 @@ class IBSync(IBClient):
 
     def openOrderEnd(self):
         super().openOrderEnd()
-        self._open_orders.finish()
+        self.results.finish(type="open_orders")
 
     def completedOrdersEnd(self):
         super().completedOrdersEnd()
-        self._completed_orders.finish()
+        self.results.finish(type="completed_orders")
 
     ##########################
     ### Executions
 
     def get_executions(self):
-        self._executions = Results()
+        request = self.results.request(type="executions")
 
-        self.reqExecutions(self.r_id, ExecutionFilter())
+        self.reqExecutions(request.id, ExecutionFilter())
 
-        with Timer() as t:
-            while not self._executions.finished:
-                t.wait()
+        request.wait()
 
-        for contract, _ in self._executions:
+        for contract, _ in request:
             self.qualify_contract(contract)
 
-        return list(self._executions)
+        return list(request)
 
     def execDetails(self, reqId, contract, execution):
         # super().execDetails(reqId, contract, execution)
-        if not self._executions.finished:
-            self._executions.append((contract, execution))
+        request = self.results.get(id=reqId)
+        if not request.finished:
+            request.append((contract, execution))
 
     def execDetailsEnd(self, reqId):
         # super().execDetailsEnd(reqId)
-        self._executions.finish(reqId)
+        self.results.get(id=reqId).finish()
 
     ##########################
     ### Contracts
 
     def get_contract_details(self, contract: Contract) -> list[ContractDetails]:
+        """
+        Метод умеет разбирать очередь сообщений в своем потоке.
+        """
+
         if contract.exchange == "NASDAQ":
             contract.exchange = "ISLAND"
         if contract.primaryExchange == "NASDAQ":
             contract.primaryExchange = "ISLAND"
-        r_id = self.r_id
 
-        self._contract_details = Results(r_id)
+        request = self.results.request(type="contract_details")
 
-        messages = []
-        self.reqContractDetails(r_id, contract)
+        self.reqContractDetails(request.id, contract)
+
         with Timer() as t:
-            while not self._contract_details.finished:
-                # Здесь у нас свой разбор очереди ответов IB.
-                # Обычно очередь разбирается в отдельном потоке,
-                # но иногда он занят. get_contract_details нужно
-                # уметь вызывать даже из потока обработки очереди.
+            # Разбор очереди сообщений от GW.
+            # Обрабатываются только сообщения про контракт.
+            while not request.finished:
                 try:
                     text = self.msg_queue.get(block=True, timeout=0.2)
                 except queue.Empty:
                     pass
                 else:
-                    fields = read_fields(text)
-                    if fields[0] == b"10" and fields[1] == str(r_id).encode():
-                        self.decoder.interpret(fields)  # type: ignore
-                    elif fields[0] == b"52" and fields[2] == str(r_id).encode():
-                        self.decoder.interpret(fields)  # type: ignore
-                        break
+                    f = read_fields(text)
+                    # Details
+                    if f[0] == b"10" and f[1]:
+                        self.decoder.interpret(f)  # type: ignore
+                    # DetailsEnd
+                    elif f[0] == b"52" and f[2]:
+                        self.decoder.interpret(f)  # type: ignore
+                    # Другие сообщения возвращаются в очередь
                     else:
-                        messages.append(text)
-                t.wait(0.001)  # чтобы поток успел обработать предыдущее
+                        self.msg_queue.put(text, block=True, timeout=0.1)
+                t.wait()
 
-        # Вернуть перехваченные чужие сообщения в очередь
-        for message in messages:
-            self.msg_queue.put(message, block=True, timeout=0.1)
-
-        return list(self._contract_details)
+        return list(request)
 
     def contractDetails(self, reqId: int, contractDetails: ContractDetails):
         # Все результаты кешируются по conId
         c = Contract(**contractDetails.contract.__dict__)
         h = hash(c)
         if h not in self._cached_details:
-            # log.warning(f"Save in cache: {c.conId}, {c.symbol}, {c.localSymbol}, h: {h}")
             self._cached_details[h] = [contractDetails]
-
-        if self._contract_details.r_id == reqId and not self._contract_details.finished:
-            self._contract_details.append(contractDetails)
+        request = self.results.get(id=reqId)
+        if request.finished:
+            log.error(f"contractDetails request is already finished: {reqId}")
+        else:
+            request.append(contractDetails)
 
     def contractDetailsEnd(self, reqId: int):
-        # FIXME: без паузы может получиться так, что finish наступит раньше
-        # FIXME: чем закончится обработка contractDetails в другом потоке.
-        sleep(0.01)
-        if self._contract_details.r_id == reqId:
-            self._contract_details.finish()
+        sleep(0.01)  # время на обработку contractDetails другим потоком
+        self.results.get(id=reqId).finish()
 
     def _get_cached_details(self, contract: Contract) -> list[ContractDetails]:
         if contract.conId:
@@ -758,8 +823,7 @@ class IBSync(IBClient):
         timeout: float = TIMEOUT,
     ):
         """
-        End Date/Time: The date, time, or time-zone entered is invalid.
-        The correct format: [yyyymmdd] hh:mm:ss [xx/xxxx]
+        The correct end_dt format: [yyyymmdd] hh:mm:ss [xx/xxxx]
         E.g.: 20031126 15:59:00 US/Eastern
         If no date is specified, current date is assumed.
         If no time-zone is specified, local time-zone is assumed (deprecated).
@@ -769,10 +833,10 @@ class IBSync(IBClient):
         if contract.secType == "CRYPTO" and data_type == "TRADES":
             data_type = "AGGTRADES"
 
-        r_id = self.r_id
-        self._historical_data = Results(r_id)
+        request = self.results.request("historical_data")
+
         self.reqHistoricalData(
-            r_id,
+            request.id,
             contract,
             endDateTime=end_dt,
             durationStr=duration,
@@ -784,43 +848,38 @@ class IBSync(IBClient):
             chartOptions=[],
         )
 
-        with Timer(timeout) as t:
-            while not self._historical_data.finished:
-                t.wait()
+        request.wait()
 
-        if self._historical_data.error:
-            if "query returned no data" in self._historical_data.error:
+        if request.error:
+            if "query returned no data" in request.error:
                 return []
             else:
-                raise Exception(self._historical_data.error)
+                raise Exception(request.error)
         else:
-            return list(self._historical_data)
+            return list(request)
 
     def historicalData(self, reqId: int, bar: BarData):
         # super().historicalData(reqId, bar)
-        if not self._historical_data.finished and self._historical_data.r_id == reqId:
-            self._historical_data.append(bar)
+        request = self.results.get(id=reqId)
+        if not request.finished:
+            request.append(bar)
 
     def historicalDataEnd(self, reqId: int, start: str, end: str):
         # super().historicalDataEnd(reqId, start, end)
-        if self._historical_data.r_id == reqId:
-            self._historical_data.finish()
+        self.results.get(id=reqId).finish()
 
     ##########################
     ### Contract head date
 
     def get_head_timestamp(self, contract, whatToShow="TRADES", useRTH=0, formatDate=2):
         # даты для BID/ASK иногда нет (например, CL.NYMEX)
-        self._head_timestamp = Results()
-        self.reqHeadTimeStamp(self.r_id, contract, whatToShow, useRTH, formatDate)
-
-        with Timer() as t:
-            while not self._head_timestamp.finished:
-                t.wait()
-
-        return list(self._head_timestamp)[0]
+        request = self.results.request("head_timestamp")
+        self.reqHeadTimeStamp(request.id, contract, whatToShow, useRTH, formatDate)
+        request.wait()
+        return list(request)[0]
 
     def headTimestamp(self, reqId: int, headTimestamp: str):
-        if not self._head_timestamp.finished:
-            self._head_timestamp.append(headTimestamp)
-            self._head_timestamp.finish()
+        request = self.results.get(id=reqId)
+        if not request.finished:
+            request.append(headTimestamp)
+            request.finish()
