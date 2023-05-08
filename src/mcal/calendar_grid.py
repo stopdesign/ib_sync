@@ -13,7 +13,7 @@ IBKR_TO_MCAL = {
     "FOREX": "Forex",
     "IDEALPRO": "Forex",
     "NASDAQ": "NASDAQ",
-    "NYMEX": "CMEGlobex",
+    "NYMEX": "CME_Rate",
     "NYSE": "NYSE",
     "PAXOS": "Paxos",
 }
