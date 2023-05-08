@@ -8,6 +8,7 @@ IBKR_TO_MCAL = {
     "ARCA": "NYSE",
     "CBOT": "CBOTGrainFutures",
     "CME": "CME_Rate",
+    "GLOBEX": "CME_Rate",
     "COMEX": "CMEGlobex_EnergyAndMetals",
     "FOREX": "Forex",
     "IDEALPRO": "Forex",
