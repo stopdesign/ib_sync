@@ -6,7 +6,7 @@ setup(
     url="https://github.com/stopdesign/ib_sync.git",
     author="IBKR and Gregory",
     description="IBKR API Client and some tools",
-    packages=["ib_sync", "ibapi", "mcal", "mcal.*"],
+    packages=["ib_sync", "ibapi", "mcal", "mcal.rules"],
     package_dir={"": "src"},
     install_requires=["pandas_market_calendars ~= 4.1, < 5"],
 )
