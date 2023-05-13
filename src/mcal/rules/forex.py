@@ -2,15 +2,10 @@ from datetime import time
 from zoneinfo import ZoneInfo
 
 from pandas import date_range
-from pandas.tseries.offsets import CustomBusinessDay
-
-mask_mon = CustomBusinessDay(weekmask="Mon")  # type: ignore
-mask_fri = CustomBusinessDay(weekmask="Fri")  # type: ignore
-mondays = date_range("2020-01-01", "2030-01-01", freq=mask_mon)
-fridays = date_range("2020-01-01", "2030-01-01", freq=mask_fri)
-
-
 from pandas_market_calendars.calendar_registry import CMEGlobexFXExchangeCalendar
+
+mondays = date_range("2020-01-01", "2030-01-01", freq="W-MON")
+fridays = date_range("2020-01-01", "2030-01-01", freq="W-FRI")
 
 
 class Forex(CMEGlobexFXExchangeCalendar):
@@ -35,6 +30,10 @@ class Forex(CMEGlobexFXExchangeCalendar):
 
 
 class ForexEURNZD(Forex):
+    """
+    Расписание Forex для пары EUR/NZD в IBKR.
+    """
+
     aliases = []
 
     regular_market_times = {
@@ -52,10 +51,17 @@ class ForexEURNZD(Forex):
 
     @property
     def special_opens_adhoc(self):
-        # TODO: попробовать описать это через перерыв
         return [
             ((time(16, 15), -1), mondays),
         ]
+
+    @property
+    def special_closes(self):
+        """
+        USThanksgivingFriday конфликтует с special_closes_adhoc,
+        поэтому приходится очистить special_closes.
+        """
+        return []
 
     @property
     def special_closes_adhoc(self):
