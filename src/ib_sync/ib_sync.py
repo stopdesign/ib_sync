@@ -404,7 +404,7 @@ class IBSync(IBClient):
     ##########################
     ### Account
 
-    def get_account_info(self) -> tuple[dict, list[Position]]:
+    def get_account_info(self, qualify=True) -> tuple[dict, list[Position]]:
         if not self.account_id:
             return {}, []
 
@@ -420,8 +420,11 @@ class IBSync(IBClient):
         # Представляете, так выглядит отписка!
         self.reqAccountUpdates(False, self.account_id)
 
-        for position in request_portfolio:
-            self.qualify_contract(position.contract)
+        # qualify_contract занимает приличное время,
+        # поэтому иногда лучше выключить
+        if qualify:
+            for position in request_portfolio:
+                self.qualify_contract(position.contract)
 
         # Распарсить ответы
         account_fields = {}
