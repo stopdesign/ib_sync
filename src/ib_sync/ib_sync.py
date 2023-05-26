@@ -431,12 +431,18 @@ class IBSync(IBClient):
         for rec in request_account:
             if rec.get("accountName") != self.account_id:
                 continue
-            if rec.get("currency") not in ["", "USD"]:
-                continue
             key = rec.get("key")
+            currency = rec.get("currency")
+            # Название валюты дописывается в ключ, если это не BASE
+            if currency not in [None, "", "BASE"]:
+                key = f"{key}-{currency}"
             value = rec.get("value")
             if key and value is not None:
                 account_fields[key] = value
+
+        # Сортировка ключей
+        if account_fields:
+            account_fields = dict(sorted(account_fields.items()))
 
         return account_fields, list(request_portfolio)
 
