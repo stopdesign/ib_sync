@@ -16,7 +16,7 @@ IBKR_TO_MCAL = {
     "NYMEX": "CME_Rate",
     "NYSE": "NYSE",
     "PAXOS": "Paxos",
-    "NYBOT": "ICEUS",
+    "NYBOT": "ICEUSFutures",
 }
 
 # for n in mcal.get_calendar_names():
