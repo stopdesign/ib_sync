@@ -683,24 +683,47 @@ class IBSync(IBClient):
     def get_executions(self):
         request = self.results.request(type="executions")
 
+        # Эти результаты не завершаются каким-то отдельным событием
+        request_commissions = self.results.request(type="commissions")
+
         self.reqExecutions(request.id, ExecutionFilter())
 
         request.wait()
 
-        for contract, _ in request:
+        for contract, _, _ in request:
             self.qualify_contract(contract)
 
-        return list(request)
+        # Комиссионные репорты по id сделки
+        commissions_by_exec_id = {}
+        for rec in request_commissions:
+            if exec_id := rec.execId:
+                commissions_by_exec_id[exec_id] = rec
+
+        # Комиссионные репорты дописываются к результатам
+        results = []
+        for contract, execution, _ in request:
+            commission = None
+            if execution.execId:
+                commission = commissions_by_exec_id.get(execution.execId, None)
+            results.append((contract, execution, commission))
+
+        return results
 
     def execDetails(self, reqId, contract, execution):
         # super().execDetails(reqId, contract, execution)
         request = self.results.get(id=reqId)
         if not request.finished:
-            request.append((contract, execution))
+            request.append((contract, execution, None))
 
     def execDetailsEnd(self, reqId):
         # super().execDetailsEnd(reqId)
         self.results.get(id=reqId).finish()
+        self.results.finish(type="commissions")
+
+    def commissionReport(self, commissionReport):
+        if requests := self.results.active(type="commissions"):
+            # Данные добавляются в последний активный запрос
+            requests[-1].append(commissionReport)
 
     ##########################
     ### Contracts
